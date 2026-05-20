@@ -2,12 +2,6 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 import re
 
 
-class UserInDB(BaseModel):
-    full_name: str
-    email: EmailStr
-    hashed_password: str
-
-
 class SignupRequest(BaseModel):
     full_name: str = Field(..., min_length=2)
     email: EmailStr
