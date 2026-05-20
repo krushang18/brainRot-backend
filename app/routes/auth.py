@@ -8,6 +8,7 @@ from app.config import RESET_TOKEN_EXPIRE_MINUTES
 from app.database import get_db
 from app.models.user import UserInDB
 from app.schemas.auth_schema import (
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
     MessageResponse,
@@ -16,6 +17,7 @@ from app.schemas.auth_schema import (
     TokenResponse,
 )
 from app.schemas.user_schema import SignupRequest
+from app.utils.dependencies import get_current_user
 from app.utils.email import send_reset_email
 from app.utils.jwt import create_access_token, create_refresh_token, decode_token
 from app.utils.security import hash_password, verify_password
@@ -116,3 +118,22 @@ async def reset_password(request: ResetPasswordRequest, db=Depends(get_db)):
         },
     )
     return MessageResponse(message="Password reset successful.")
+
+
+@router.post("/change-password", response_model=MessageResponse)
+async def change_password(
+    request: ChangePasswordRequest,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    if not verify_password(request.current_password, current_user["hashed_password"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    if request.new_password != request.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+
+    await db["users"].update_one(
+        {"_id": current_user["_id"]},
+        {"$set": {"hashed_password": hash_password(request.new_password)}},
+    )
+    return MessageResponse(message="Password changed successfully.")
