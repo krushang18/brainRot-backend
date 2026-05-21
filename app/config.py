@@ -15,3 +15,9 @@ GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 RESET_TOKEN_EXPIRE_MINUTES = 30
+
+OTP_EXPIRE_MINUTES = 10
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",")]
