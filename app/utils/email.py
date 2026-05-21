@@ -1,6 +1,6 @@
 from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 
-from app.config import FRONTEND_URL, GMAIL_APP_PASSWORD, GMAIL_USER, RESET_TOKEN_EXPIRE_MINUTES
+from app.config import FRONTEND_URL, GMAIL_APP_PASSWORD, GMAIL_USER, OTP_EXPIRE_MINUTES, RESET_TOKEN_EXPIRE_MINUTES
 
 _conf = ConnectionConfig(
     MAIL_USERNAME=GMAIL_USER,
@@ -24,6 +24,21 @@ async def send_reset_email(to_email: str, token: str) -> None:
             f"Click the link below to reset your password:\n{reset_link}\n\n"
             f"This link expires in {RESET_TOKEN_EXPIRE_MINUTES} minutes.\n"
             f"If you did not request this, ignore this email."
+        ),
+        subtype=MessageType.plain,
+    )
+    await FastMail(_conf).send_message(message)
+
+
+async def send_otp_email(to_email: str, otp: str) -> None:
+    message = MessageSchema(
+        subject="Your BrainRot login code",
+        recipients=[to_email],
+        body=(
+            f"Hi,\n\n"
+            f"Your one-time login code is: {otp}\n\n"
+            f"This code expires in {OTP_EXPIRE_MINUTES} minutes.\n"
+            f"If you did not attempt to log in, please change your password immediately."
         ),
         subtype=MessageType.plain,
     )

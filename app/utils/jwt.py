@@ -9,8 +9,8 @@ def _create_token(data: dict, expires_minutes: int) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
-def create_access_token(user_id: str, email: str) -> str:
-    return _create_token({"sub": user_id, "email": email, "type": "access"}, ACCESS_TOKEN_EXPIRE_MINUTES)
+def create_access_token(user_id: str, email: str, device_id: str = "") -> str:
+    return _create_token({"sub": user_id, "email": email, "type": "access", "did": device_id}, ACCESS_TOKEN_EXPIRE_MINUTES)
 
 
 def create_refresh_token(user_id: str) -> str:

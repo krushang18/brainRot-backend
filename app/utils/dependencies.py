@@ -26,4 +26,18 @@ async def get_current_user(
             detail="Invalid or expired access token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    device_id = payload.get("did", "")
+    if device_id:
+        blocked = await db["revoked_devices"].find_one({
+            "user_id": ObjectId(payload["sub"]),
+            "device_id": device_id,
+        })
+        if blocked:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Device has been revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
     return user

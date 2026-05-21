@@ -9,6 +9,8 @@ async def connect_to_db():
     client = AsyncIOMotorClient(MONGODB_URI)
     db = client[MONGODB_DATABASE]
     await client.admin.command("ping")
+    await db["sessions"].create_index("expires", expireAfterSeconds=0)
+    await db["revoked_devices"].create_index("expires", expireAfterSeconds=0)
     print(f"✓ Connected to MongoDB: {MONGODB_DATABASE}")
 
 async def close_db_connection():
