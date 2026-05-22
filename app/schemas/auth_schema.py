@@ -44,11 +44,13 @@ class LoginResponse(BaseModel):
     access_token: Optional[str] = None
     refresh_token: Optional[str] = None
     token_type: str = "bearer"
+    device_id: Optional[str] = None
 
 
 class VerifyOTPRequest(BaseModel):
     email: EmailStr
     otp: str
+    device_id: Optional[str] = None
 
 
 class DeviceInfo(BaseModel):
@@ -65,3 +67,4 @@ class LogoutRequest(BaseModel):
 
 class ResendOTPRequest(BaseModel):
     email: EmailStr
+    device_id: Optional[str] = None

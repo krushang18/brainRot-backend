@@ -123,7 +123,7 @@ async def login(request_body: LoginRequest, request: Request, response: Response
         {"$set": {"pending_otp": {"code": otp, "device_id": device_id, "expires": expires}}},
     )
     await send_otp_email(user["email"], otp)
-    return LoginResponse(otp_required=True)
+    return LoginResponse(otp_required=True, device_id=device_id)
 
 
 @router.post("/verify-otp", response_model=LoginResponse)
@@ -133,7 +133,7 @@ async def verify_otp(
     response: Response,
     db=Depends(get_db),
 ):
-    device_id = request.cookies.get("device_id")
+    device_id = request_body.device_id or request.cookies.get("device_id")
     if not device_id:
         raise HTTPException(status_code=400, detail="No device cookie found")
 
@@ -277,7 +277,7 @@ async def change_password(
 
 @router.post("/resend-otp", response_model=MessageResponse)
 async def resend_otp(request_body: ResendOTPRequest, request: Request, db=Depends(get_db)):
-    device_id = request.cookies.get("device_id")
+    device_id = request_body.device_id or request.cookies.get("device_id")
     if not device_id:
         raise HTTPException(status_code=400, detail="No device cookie found")
     user = await db["users"].find_one({"email": request_body.email})
