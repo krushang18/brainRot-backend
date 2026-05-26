@@ -8,18 +8,18 @@ from app.config import COOKIE_SECURE
 DEVICE_COOKIE = "device_id"
 
 
-def get_or_create_device_id(request: Request, response: Response) -> str:
-    device_id = request.cookies.get(DEVICE_COOKIE)
+def get_or_create_device_id(request: Request, response: Response, client_device_id: str | None = None) -> str:
+    device_id = client_device_id or request.cookies.get(DEVICE_COOKIE)
     if not device_id:
         device_id = str(uuid.uuid4())
-        response.set_cookie(
-            DEVICE_COOKIE,
-            device_id,
-            httponly=True,
-            secure=COOKIE_SECURE,
-            samesite="none" if COOKIE_SECURE else "lax",
-            max_age=365 * 24 * 3600,
-        )
+    response.set_cookie(
+        DEVICE_COOKIE,
+        device_id,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="none" if COOKIE_SECURE else "lax",
+        max_age=365 * 24 * 3600,
+    )
     return device_id
 
 
