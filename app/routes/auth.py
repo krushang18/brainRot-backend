@@ -84,6 +84,7 @@ async def signup(user: SignupRequest, request: Request, response: Response, db=D
         otp_required=False,
         access_token=create_access_token(user_id, user.email, device_id),
         refresh_token=refresh,
+        device_id=device_id,
     )
 
 
@@ -96,7 +97,7 @@ async def login(request_body: LoginRequest, request: Request, response: Response
             detail="Invalid email or password",
         )
 
-    device_id = get_or_create_device_id(request, response)
+    device_id = get_or_create_device_id(request, response, request_body.device_id)
     trusted = next(
         (d for d in user.get("trusted_devices", []) if d["device_id"] == device_id),
         None,
@@ -107,6 +108,7 @@ async def login(request_body: LoginRequest, request: Request, response: Response
             {"_id": user["_id"], "trusted_devices.device_id": device_id},
             {"$set": {"trusted_devices.$.last_used": datetime.now(timezone.utc)}},
         )
+        await db["revoked_devices"].delete_many({"user_id": user["_id"], "device_id": device_id})
         user_id = str(user["_id"])
         refresh = create_refresh_token(user_id)
         await _save_session(db, user["_id"], device_id, refresh)
@@ -114,6 +116,7 @@ async def login(request_body: LoginRequest, request: Request, response: Response
             otp_required=False,
             access_token=create_access_token(user_id, user["email"], device_id),
             refresh_token=refresh,
+            device_id=device_id,
         )
 
     otp = generate_otp()
@@ -159,6 +162,7 @@ async def verify_otp(
         {"_id": user["_id"]},
         {"$push": {"trusted_devices": device_doc}, "$unset": {"pending_otp": ""}},
     )
+    await db["revoked_devices"].delete_many({"user_id": user["_id"], "device_id": device_id})
 
     user_id = str(user["_id"])
     refresh = create_refresh_token(user_id)
@@ -167,6 +171,7 @@ async def verify_otp(
         otp_required=False,
         access_token=create_access_token(user_id, user["email"], device_id),
         refresh_token=refresh,
+        device_id=device_id,
     )
 
 

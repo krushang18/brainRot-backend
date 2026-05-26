@@ -7,6 +7,7 @@ from pydantic import BaseModel, EmailStr, Field
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    device_id: Optional[str] = None
 
 
 class TokenResponse(BaseModel):
