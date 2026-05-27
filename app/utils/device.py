@@ -3,7 +3,7 @@ import uuid
 
 from fastapi import Request, Response
 
-from app.config import COOKIE_SECURE
+from app.config import COOKIE_SAMESITE, COOKIE_SECURE
 
 DEVICE_COOKIE = "device_id"
 
@@ -17,7 +17,7 @@ def get_or_create_device_id(request: Request, response: Response, client_device_
         device_id,
         httponly=True,
         secure=COOKIE_SECURE,
-        samesite="none" if COOKIE_SECURE else "lax",
+        samesite=COOKIE_SAMESITE,
         max_age=365 * 24 * 3600,
     )
     return device_id

@@ -24,5 +24,6 @@ GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 # --- CORS & Frontend ---
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "none" if COOKIE_SECURE else "lax")
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",")]
