@@ -5,6 +5,3 @@ __pycache__/
 *.pem
 
 CLAUDE.md
-
-localhost+2.pem
-localhost+2-key.pem
