@@ -11,6 +11,8 @@ async def connect_to_db():
     await client.admin.command("ping")
     await db["sessions"].create_index("expires", expireAfterSeconds=0)
     await db["revoked_devices"].create_index("expires", expireAfterSeconds=0)
+    await db["oauth_states"].create_index("expires", expireAfterSeconds=0)
+    await db["oauth_codes"].create_index("expires", expireAfterSeconds=0)
     print(f"✓ Connected to MongoDB: {MONGODB_DATABASE}")
 
 async def close_db_connection():

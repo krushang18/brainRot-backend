@@ -1,11 +1,17 @@
 import secrets
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 
 from app.config import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
+    FRONTEND_URL,
+    GITHUB_CALLBACK_URL,
+    GITHUB_CLIENT_ID,
+    GITHUB_CLIENT_SECRET,
     OTP_EXPIRE_MINUTES,
     REFRESH_TOKEN_EXPIRE_MINUTES,
     RESET_TOKEN_EXPIRE_MINUTES,
@@ -20,6 +26,7 @@ from app.schemas.auth_schema import (
     LoginResponse,
     LogoutRequest,
     MessageResponse,
+    OAuthExchangeRequest,
     RefreshRequest,
     ResendOTPRequest,
     ResetPasswordRequest,
@@ -91,7 +98,8 @@ async def signup(user: SignupRequest, request: Request, response: Response, db=D
 @router.post("/login", response_model=LoginResponse)
 async def login(request_body: LoginRequest, request: Request, response: Response, db=Depends(get_db)):
     user = await db["users"].find_one({"email": request_body.email})
-    if not user or not verify_password(request_body.password, user["hashed_password"]):
+    hashed = user.get("hashed_password") if user else None
+    if not user or not hashed or not verify_password(request_body.password, hashed):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
@@ -267,6 +275,8 @@ async def change_password(
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):
+    if not current_user.get("hashed_password"):
+        raise HTTPException(status_code=400, detail="Account uses OAuth login — no password is set")
     if not verify_password(request.current_password, current_user["hashed_password"]):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
@@ -334,3 +344,179 @@ async def revoke_device(
         "device_id": device_id,
         "expires": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     })
+
+
+# ---------------------------------------------------------------------------
+# GitHub OAuth
+# ---------------------------------------------------------------------------
+
+GITHUB_AUTH_URL = "https://github.com/login/oauth/authorize"
+GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+GITHUB_USER_URL = "https://api.github.com/user"
+GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
+OAUTH_STATE_EXPIRE_MINUTES = 10
+OAUTH_CODE_EXPIRE_MINUTES = 5
+
+
+@router.get("/github/login")
+async def github_login(db=Depends(get_db)):
+    state = secrets.token_urlsafe(32)
+    await db["oauth_states"].insert_one({
+        "state": state,
+        "expires": datetime.now(timezone.utc) + timedelta(minutes=OAUTH_STATE_EXPIRE_MINUTES),
+    })
+    params = (
+        f"?client_id={GITHUB_CLIENT_ID}"
+        f"&redirect_uri={GITHUB_CALLBACK_URL}"
+        f"&scope=user:email"
+        f"&state={state}"
+    )
+    return RedirectResponse(url=GITHUB_AUTH_URL + params)
+
+
+@router.get("/github/callback")
+async def github_callback(code: str, state: str, db=Depends(get_db)):
+    error_redirect = RedirectResponse(url=f"{FRONTEND_URL}/login?error=oauth_failed")
+
+    # Verify and consume the CSRF state
+    state_doc = await db["oauth_states"].find_one_and_delete({
+        "state": state,
+        "expires": {"$gt": datetime.now(timezone.utc)},
+    })
+    if not state_doc:
+        return error_redirect
+
+    # Exchange code for GitHub access token
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post(
+            GITHUB_TOKEN_URL,
+            json={
+                "client_id": GITHUB_CLIENT_ID,
+                "client_secret": GITHUB_CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": GITHUB_CALLBACK_URL,
+            },
+            headers={"Accept": "application/json"},
+        )
+        if token_resp.status_code != 200:
+            return error_redirect
+        token_data = token_resp.json()
+        github_access_token = token_data.get("access_token")
+        if not github_access_token:
+            return error_redirect
+
+        gh_headers = {
+            "Authorization": f"Bearer {github_access_token}",
+            "Accept": "application/vnd.github+json",
+        }
+
+        # Fetch GitHub profile
+        profile_resp = await client.get(GITHUB_USER_URL, headers=gh_headers)
+        if profile_resp.status_code != 200:
+            return error_redirect
+        profile = profile_resp.json()
+        github_id = str(profile["id"])
+        full_name = profile.get("name") or profile.get("login", "GitHub User")
+
+        # Fetch verified primary email
+        emails_resp = await client.get(GITHUB_EMAILS_URL, headers=gh_headers)
+        if emails_resp.status_code != 200:
+            return error_redirect
+        emails = emails_resp.json()
+
+    primary_email = next(
+        (e["email"] for e in emails if e.get("primary") and e.get("verified")),
+        None,
+    )
+    if not primary_email:
+        return RedirectResponse(url=f"{FRONTEND_URL}/login?error=no_email")
+
+    # Find or create the local user
+    user = await db["users"].find_one({"github_id": github_id})
+    if not user:
+        user = await db["users"].find_one({"email": primary_email})
+        if user:
+            # Link GitHub to existing email-based account
+            await db["users"].update_one(
+                {"_id": user["_id"]},
+                {"$set": {"github_id": github_id}},
+            )
+        else:
+            # Create new OAuth-only account
+            user_doc = UserInDB(
+                full_name=full_name,
+                email=primary_email,
+                github_id=github_id,
+            )
+            result = await db["users"].insert_one(user_doc.model_dump())
+            user = await db["users"].find_one({"_id": result.inserted_id})
+
+    # Issue a short-lived one-time code the frontend will exchange for tokens
+    temp_code = secrets.token_urlsafe(32)
+    await db["oauth_codes"].insert_one({
+        "temp_code": temp_code,
+        "user_id": user["_id"],
+        "expires": datetime.now(timezone.utc) + timedelta(minutes=OAUTH_CODE_EXPIRE_MINUTES),
+    })
+
+    return RedirectResponse(
+        url=f"{FRONTEND_URL}/oauth/callback?temp_code={temp_code}&provider=github"
+    )
+
+
+@router.post("/github/exchange", response_model=LoginResponse)
+async def github_exchange(
+    request_body: OAuthExchangeRequest,
+    request: Request,
+    response: Response,
+    db=Depends(get_db),
+):
+    code_doc = await db["oauth_codes"].find_one_and_delete({
+        "temp_code": request_body.temp_code,
+        "expires": {"$gt": datetime.now(timezone.utc)},
+    })
+    if not code_doc:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth code")
+
+    user = await db["users"].find_one({"_id": code_doc["user_id"]})
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth code")
+
+    device_id = get_or_create_device_id(request, response, request_body.device_id)
+    ua = request.headers.get("user-agent", "")
+    now = datetime.now(timezone.utc)
+
+    trusted = next(
+        (d for d in user.get("trusted_devices", []) if d["device_id"] == device_id),
+        None,
+    )
+    if trusted:
+        await db["users"].update_one(
+            {"_id": user["_id"], "trusted_devices.device_id": device_id},
+            {"$set": {"trusted_devices.$.last_used": now}},
+        )
+    else:
+        device_doc = {
+            "device_id": device_id,
+            "name": parse_device_name(ua),
+            "ip": request.client.host,
+            "added_at": now,
+            "last_used": now,
+        }
+        await db["users"].update_one(
+            {"_id": user["_id"]},
+            {"$push": {"trusted_devices": device_doc}},
+        )
+
+    await db["revoked_devices"].delete_many({"user_id": user["_id"], "device_id": device_id})
+
+    user_id = str(user["_id"])
+    refresh = create_refresh_token(user_id)
+    await _save_session(db, user["_id"], device_id, refresh)
+
+    return LoginResponse(
+        otp_required=False,
+        access_token=create_access_token(user_id, user["email"], device_id),
+        refresh_token=refresh,
+        device_id=device_id,
+    )

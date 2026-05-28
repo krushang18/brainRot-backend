@@ -69,3 +69,8 @@ class LogoutRequest(BaseModel):
 class ResendOTPRequest(BaseModel):
     email: EmailStr
     device_id: Optional[str] = None
+
+
+class OAuthExchangeRequest(BaseModel):
+    temp_code: str
+    device_id: Optional[str] = None
