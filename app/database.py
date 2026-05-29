@@ -13,6 +13,12 @@ async def connect_to_db():
     await db["revoked_devices"].create_index("expires", expireAfterSeconds=0)
     await db["oauth_states"].create_index("expires", expireAfterSeconds=0)
     await db["oauth_codes"].create_index("expires", expireAfterSeconds=0)
+    await db["notes"].create_index([("user_id", 1), ("_id", -1)])
+    await db["notes"].create_index(
+        [("title", "text"), ("content", "text"), ("tags", "text")],
+        weights={"title": 10, "tags": 5, "content": 1},
+        default_language="english",
+    )
     print(f"✓ Connected to MongoDB: {MONGODB_DATABASE}")
 
 async def close_db_connection():
