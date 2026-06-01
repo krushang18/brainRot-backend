@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+from starlette.middleware.sessions import SessionMiddleware
 from app.config import ALLOWED_ORIGINS
 from app.database import close_db_connection, connect_to_db
 from app.routes.auth import router as auth_router
@@ -23,6 +23,10 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     # allow_headers=["Accept", "Accept-Language", "Content-Language", "Content-Type", "Access-Control-Allow-Origin", "Authorization"],
     allow_headers=["*"],
+)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key="super-secret-session-key",
 )
 
 app.include_router(auth_router, prefix="/auth")
