@@ -6,6 +6,7 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 
+from authlib.integrations.starlette_client import OAuth
 from app.config import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     FRONTEND_URL,
@@ -15,6 +16,8 @@ from app.config import (
     OTP_EXPIRE_MINUTES,
     REFRESH_TOKEN_EXPIRE_MINUTES,
     RESET_TOKEN_EXPIRE_MINUTES,
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
 )
 from app.database import get_db
 from app.models.user import UserInDB
@@ -41,7 +44,22 @@ from app.utils.jwt import create_access_token, create_refresh_token, decode_toke
 from app.utils.security import hash_password, verify_password
 
 router = APIRouter()
+print("AUTH FILE LOADED")
+oauth = OAuth()
+print(GOOGLE_CLIENT_ID)
+print(GOOGLE_CLIENT_SECRET)
+oauth.register(
+    name="google",
+    client_id=GOOGLE_CLIENT_ID,
+    client_secret=GOOGLE_CLIENT_SECRET,
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={
+        "scope": "openid email profile"
+    },
+)
 
+
+print("GOOGLE OAUTH REGISTERED")
 
 async def _save_session(db, user_id, device_id: str, refresh_token: str) -> None:
     await db["sessions"].insert_one({
@@ -99,6 +117,7 @@ async def signup(user: SignupRequest, request: Request, response: Response, db=D
 async def login(request_body: LoginRequest, request: Request, response: Response, db=Depends(get_db)):
     user = await db["users"].find_one({"email": request_body.email})
     hashed = user.get("hashed_password") if user else None
+
     if not user or not hashed or not verify_password(request_body.password, hashed):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -306,6 +325,93 @@ async def resend_otp(request_body: ResendOTPRequest, request: Request, db=Depend
         await send_otp_email(user["email"], otp)
     return MessageResponse(message="If a login was pending, a new OTP has been sent.")
 
+@router.get("/google/login")
+async def google_login(request: Request):
+    redirect_uri = "https://localhost:8000/auth/google/callback"
+
+    return await oauth.google.authorize_redirect(
+        request,
+        redirect_uri,
+    )
+
+@router.get("/google/callback")
+async def google_callback(
+    request: Request,
+    response: Response,
+    db=Depends(get_db),
+):
+    token = await oauth.google.authorize_access_token(request)
+
+    user_info = token.get("userinfo")
+
+    email = user_info["email"]
+    full_name = user_info.get("name", "")
+    google_id = user_info.get("sub")
+
+    user = await db["users"].find_one({"email": email})
+
+    if not user:
+        user_doc = UserInDB(
+            full_name=full_name,
+            email=email,
+            hashed_password=None,
+            auth_provider="google",
+            google_id=google_id,
+        )
+        result = await db["users"].insert_one(user_doc.model_dump())
+
+        user = await db["users"].find_one({
+            "_id": result.inserted_id
+        })
+
+    user_id = str(user["_id"])
+
+    device_id = get_or_create_device_id(request, response)
+
+    ua = request.headers.get("user-agent", "")
+    now = datetime.now(timezone.utc)
+
+    trusted = next(
+        (
+            d for d in user.get("trusted_devices", [])
+            if d["device_id"] == device_id
+        ),
+        None
+    )
+
+    if not trusted:
+        device_doc = {
+            "device_id": device_id,
+            "name": parse_device_name(ua),
+            "ip": request.client.host,
+            "added_at": now,
+            "last_used": now,
+        }
+
+        await db["users"].update_one(
+            {"_id": user["_id"]},
+            {"$push": {"trusted_devices": device_doc}},
+        )
+
+    refresh = create_refresh_token(user_id)
+
+    await _save_session(
+        db,
+        user["_id"],
+        device_id,
+        refresh,
+    )
+
+    return LoginResponse(
+        otp_required=False,
+        access_token=create_access_token(
+            user_id,
+            email,
+            device_id,
+        ),
+        refresh_token=refresh,
+        device_id=device_id,
+    )
 
 @router.get("/devices", response_model=list[DeviceInfo])
 async def list_devices(current_user=Depends(get_current_user)):
