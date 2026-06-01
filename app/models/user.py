@@ -8,11 +8,11 @@ class UserInDB(BaseModel):
     full_name: str
 
     email: EmailStr
-
     hashed_password: Optional[str] = None
 
     auth_provider: str = "local"
-
+    
+    github_id: Optional[str] = None
     google_id: Optional[str] = None
 
     trusted_devices: list = []
