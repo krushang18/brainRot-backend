@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
+from itertools import zip_longest
 from typing import Optional
 
 from bson import ObjectId
@@ -8,8 +9,16 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 
 from app.config import MAX_NOTE_IMAGES
 from app.database import get_db
-from app.models.note import NoteInDB
-from app.schemas.note_schema import NoteCategory, NoteListResponse, NoteResponse, NoteSearchResponse, RemoveImageRequest
+from app.models.note import NoteImageInDB, NoteInDB
+from app.schemas.note_schema import (
+    NoteCategory,
+    NoteImage,
+    NoteListResponse,
+    NoteResponse,
+    NoteSearchResponse,
+    RemoveImageRequest,
+    UpdateImageCaptionRequest,
+)
 from app.utils.cloudinary_client import delete_image, upload_image
 from app.utils.dependencies import get_current_user
 
@@ -25,7 +34,10 @@ def _serialize(doc: dict) -> NoteResponse:
         category=doc["category"],
         content=doc["content"],
         tags=doc.get("tags", []),
-        image_urls=doc.get("image_urls", []),
+        images=[
+            NoteImage(url=i["url"], caption=i.get("caption"))
+            for i in doc.get("images", [])
+        ],
         is_favorite=doc.get("is_favorite", False),
         created_at=doc["created_at"],
         updated_at=doc["updated_at"],
@@ -39,16 +51,16 @@ def _to_oid(note_id: str) -> ObjectId:
         raise HTTPException(status_code=400, detail="Invalid note id")
 
 
-def _parse_tags(raw: Optional[str]) -> list[str]:
-    if not raw or raw.strip() == "[]":
+def _parse_json_list(raw: Optional[str], field: str) -> list:
+    if not raw or raw.strip() in ("[]", ""):
         return []
     try:
         parsed = json.loads(raw)
         if not isinstance(parsed, list):
-            raise HTTPException(status_code=400, detail="tags must be a JSON array, e.g. [\"React\"]")
-        return [t.strip() for t in parsed if isinstance(t, str) and t.strip()]
+            raise HTTPException(status_code=400, detail=f"{field} must be a JSON array")
+        return parsed
     except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="tags must be a JSON array, e.g. [\"React\"]")
+        raise HTTPException(status_code=400, detail=f"{field} must be a JSON array")
 
 
 def _validate_image(img: UploadFile) -> None:
@@ -71,14 +83,20 @@ async def _get_own_note(note_id: str, user_id: str, db) -> dict:
     return doc
 
 
-async def _upload_images(images: list[UploadFile]) -> tuple[list[str], list[str]]:
-    urls, pids = [], []
-    for img in images:
+async def _upload_images(
+    files: list[UploadFile],
+    captions: list,
+) -> list[NoteImageInDB]:
+    result = []
+    for img, caption in zip_longest(files, captions):
         _validate_image(img)
-        result = await upload_image(img)
-        urls.append(result["url"])
-        pids.append(result["public_id"])
-    return urls, pids
+        uploaded = await upload_image(img)
+        result.append(NoteImageInDB(
+            url=uploaded["url"],
+            public_id=uploaded["public_id"],
+            caption=caption if isinstance(caption, str) and caption.strip() else None,
+        ))
+    return result
 
 
 # ── List ───────────────────────────────────────────────────────────────────
@@ -126,6 +144,7 @@ async def create_note(
     tags: str = Form("[]"),
     is_favorite: bool = Form(False),
     images: list[UploadFile] = File(default=[]),
+    captions: str = Form("[]"),
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -135,7 +154,8 @@ async def create_note(
             detail=f"Cannot attach more than {MAX_NOTE_IMAGES} images per note.",
         )
 
-    image_urls, image_public_ids = await _upload_images(images)
+    caption_list = _parse_json_list(captions, "captions")
+    image_docs = await _upload_images(images, caption_list)
 
     now = datetime.now(timezone.utc)
     note_doc = NoteInDB(
@@ -143,9 +163,8 @@ async def create_note(
         title=title,
         category=category.value,
         content=content,
-        tags=_parse_tags(tags),
-        image_urls=image_urls,
-        image_public_ids=image_public_ids,
+        tags=_parse_json_list(tags, "tags"),
+        images=image_docs,
         is_favorite=is_favorite,
         created_at=now,
         updated_at=now,
@@ -220,6 +239,7 @@ async def update_note(
     tags: Optional[str] = Form(None),
     is_favorite: Optional[bool] = Form(None),
     images: list[UploadFile] = File(default=[]),
+    captions: str = Form("[]"),
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -234,33 +254,29 @@ async def update_note(
     if content is not None:
         updates["content"] = content
     if tags is not None:
-        updates["tags"] = _parse_tags(tags)
+        updates["tags"] = _parse_json_list(tags, "tags")
     if is_favorite is not None:
         updates["is_favorite"] = is_favorite
 
-    # Append new images if sent
     if images:
-        current_count = len(existing.get("image_urls", []))
+        current_count = len(existing.get("images", []))
         if current_count + len(images) > MAX_NOTE_IMAGES:
             raise HTTPException(
                 status_code=400,
                 detail=f"This note already has {current_count} image(s). Adding {len(images)} more would exceed the {MAX_NOTE_IMAGES}-image limit.",
             )
-        new_urls, new_pids = await _upload_images(images)
+        caption_list = _parse_json_list(captions, "captions")
+        new_image_docs = await _upload_images(images, caption_list)
         await db["notes"].update_one(
             {"_id": oid},
-            {"$push": {"image_urls": {"$each": new_urls}, "image_public_ids": {"$each": new_pids}}},
+            {"$push": {"images": {"$each": [img.model_dump() for img in new_image_docs]}}},
         )
 
     if not updates and not images:
         return _serialize(existing)
 
-    if updates:
-        updates["updated_at"] = datetime.now(timezone.utc)
-        await db["notes"].update_one({"_id": oid}, {"$set": updates})
-    elif images:
-        await db["notes"].update_one({"_id": oid}, {"$set": {"updated_at": datetime.now(timezone.utc)}})
-
+    updates["updated_at"] = datetime.now(timezone.utc)
+    await db["notes"].update_one({"_id": oid}, {"$set": updates})
     return _serialize(await db["notes"].find_one({"_id": oid}))
 
 
@@ -277,11 +293,62 @@ async def delete_note(
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Note not found")
-    for pid in doc.get("image_public_ids", []):
-        delete_image(pid)
+    for img in doc.get("images", []):
+        delete_image(img["public_id"])
 
 
-# ── Delete single image ────────────────────────────────────────────────────
+# ── Image sub-resource ─────────────────────────────────────────────────────
+
+@router.post("/{note_id}/images", response_model=NoteResponse)
+async def add_images(
+    note_id: str,
+    images: list[UploadFile] = File(...),
+    captions: str = Form("[]"),
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    oid = _to_oid(note_id)
+    existing = await _get_own_note(note_id, str(current_user["_id"]), db)
+
+    current_count = len(existing.get("images", []))
+    if current_count + len(images) > MAX_NOTE_IMAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This note already has {current_count} image(s). Adding {len(images)} more would exceed the {MAX_NOTE_IMAGES}-image limit.",
+        )
+
+    caption_list = _parse_json_list(captions, "captions")
+    new_image_docs = await _upload_images(images, caption_list)
+
+    await db["notes"].update_one(
+        {"_id": oid},
+        {
+            "$push": {"images": {"$each": [img.model_dump() for img in new_image_docs]}},
+            "$set": {"updated_at": datetime.now(timezone.utc)},
+        },
+    )
+    return _serialize(await db["notes"].find_one({"_id": oid}))
+
+
+@router.patch("/{note_id}/images", response_model=NoteResponse)
+async def update_image_caption(
+    note_id: str,
+    body: UpdateImageCaptionRequest,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    oid = _to_oid(note_id)
+    existing = await _get_own_note(note_id, str(current_user["_id"]), db)
+
+    if not any(i["url"] == body.image_url for i in existing.get("images", [])):
+        raise HTTPException(status_code=404, detail="Image URL not found on this note.")
+
+    await db["notes"].update_one(
+        {"_id": oid, "images.url": body.image_url},
+        {"$set": {"images.$.caption": body.caption, "updated_at": datetime.now(timezone.utc)}},
+    )
+    return _serialize(await db["notes"].find_one({"_id": oid}))
+
 
 @router.delete("/{note_id}/images", response_model=NoteResponse)
 async def remove_image(
@@ -293,22 +360,19 @@ async def remove_image(
     oid = _to_oid(note_id)
     existing = await _get_own_note(note_id, str(current_user["_id"]), db)
 
-    existing_urls = existing.get("image_urls", [])
-    existing_pids = existing.get("image_public_ids", [])
-
-    if body.image_url not in existing_urls:
+    img_to_delete = next(
+        (i for i in existing.get("images", []) if i["url"] == body.image_url), None
+    )
+    if not img_to_delete:
         raise HTTPException(status_code=404, detail="Image URL not found on this note.")
 
-    idx = existing_urls.index(body.image_url)
-    public_id = existing_pids[idx]
-
-    kept_urls = [u for u in existing_urls if u != body.image_url]
-    kept_pids = [p for i, p in enumerate(existing_pids) if i != idx]
-
-    delete_image(public_id)
+    delete_image(img_to_delete["public_id"])
 
     await db["notes"].update_one(
         {"_id": oid},
-        {"$set": {"image_urls": kept_urls, "image_public_ids": kept_pids, "updated_at": datetime.now(timezone.utc)}},
+        {
+            "$pull": {"images": {"url": body.image_url}},
+            "$set": {"updated_at": datetime.now(timezone.utc)},
+        },
     )
     return _serialize(await db["notes"].find_one({"_id": oid}))

@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class NoteCategory(str, Enum):
@@ -14,8 +14,18 @@ class NoteCategory(str, Enum):
     GENERAL  = "general"
 
 
+class NoteImage(BaseModel):
+    url: str
+    caption: Optional[str] = None
+
+
 class RemoveImageRequest(BaseModel):
     image_url: str
+
+
+class UpdateImageCaptionRequest(BaseModel):
+    image_url: str
+    caption: Optional[str] = None
 
 
 class NoteResponse(BaseModel):
@@ -24,7 +34,7 @@ class NoteResponse(BaseModel):
     category: str
     content: str
     tags: list[str]
-    image_urls: list[str]
+    images: list[NoteImage]
     is_favorite: bool
     created_at: datetime
     updated_at: datetime
