@@ -1,7 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
 import re
-
-
+from typing import Optional
 class SignupRequest(BaseModel):
     full_name: str = Field(..., min_length=2)
     email: EmailStr
@@ -33,3 +32,13 @@ class SignupRequest(BaseModel):
             )
 
         return value
+    
+
+class OAuthUser(BaseModel):
+    email: EmailStr
+    full_name: str
+
+    auth_provider: str
+
+    google_id: Optional[str] = None
+    github_id: Optional[str] = None
