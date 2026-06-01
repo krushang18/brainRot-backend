@@ -18,6 +18,7 @@ from app.config import (
     RESET_TOKEN_EXPIRE_MINUTES,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
+    GOOGLE_CALLBACK_URL,
 )
 from app.database import get_db
 from app.models.user import UserInDB
@@ -327,12 +328,7 @@ async def resend_otp(request_body: ResendOTPRequest, request: Request, db=Depend
 
 @router.get("/google/login")
 async def google_login(request: Request):
-    redirect_uri = "https://localhost:8000/auth/google/callback"
-
-    return await oauth.google.authorize_redirect(
-        request,
-        redirect_uri,
-    )
+    return await oauth.google.authorize_redirect(request, GOOGLE_CALLBACK_URL)
 
 @router.get("/google/callback")
 async def google_callback(
