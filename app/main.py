@@ -6,6 +6,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.config import ALLOWED_ORIGINS
 from app.database import close_db_connection, connect_to_db
 from app.routes.auth import router as auth_router
+from app.routes.notes import router as notes_router
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -30,6 +31,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix="/auth")
+app.include_router(notes_router, prefix="/notes")
 
 @app.get("/")
 def home():
