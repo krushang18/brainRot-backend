@@ -6,9 +6,13 @@ db: AsyncIOMotorDatabase = None
 
 async def connect_to_db():
     global client, db
-    client = AsyncIOMotorClient(MONGODB_URI)
-    db = client[MONGODB_DATABASE]
-    await client.admin.command("ping")
+    try:
+        client = AsyncIOMotorClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+        db = client[MONGODB_DATABASE]
+        await client.admin.command("ping")
+    except Exception as e:
+        print(f"✗ MongoDB connection failed: {e}")
+        raise
     await db["sessions"].create_index("expires", expireAfterSeconds=0)
     await db["revoked_devices"].create_index("expires", expireAfterSeconds=0)
     await db["oauth_states"].create_index("expires", expireAfterSeconds=0)
