@@ -38,6 +38,9 @@ COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "none" if COOKIE_SECURE else "lax
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "")
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",")]
 
+# --- Session ---
+SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-in-production")
+
 # --- Cloudinary ---
 CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
