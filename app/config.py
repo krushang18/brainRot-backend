@@ -36,7 +36,7 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "")
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "none" if COOKIE_SECURE else "lax")
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "")
-ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",")]
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 # --- Session ---
 SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-in-production")

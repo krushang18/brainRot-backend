@@ -17,17 +17,15 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+)
+app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    # allow_headers=["Accept", "Accept-Language", "Content-Language", "Content-Type", "Access-Control-Allow-Origin", "Authorization"],
     allow_headers=["*"],
-)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=SESSION_SECRET,
 )
 
 app.include_router(auth_router, prefix="/auth")
