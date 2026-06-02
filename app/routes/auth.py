@@ -331,21 +331,30 @@ async def google_login(request: Request):
     return await oauth.google.authorize_redirect(request, GOOGLE_CALLBACK_URL)
 
 @router.get("/google/callback")
-async def google_callback(
-    request: Request,
-    response: Response,
-    db=Depends(get_db),
-):
-    token = await oauth.google.authorize_access_token(request)
+async def google_callback(request: Request, db=Depends(get_db)):
+    error_redirect = RedirectResponse(
+        url=f"{FRONTEND_URL}/oauth/callback?error=oauth_failed&provider=google"
+    )
+
+    try:
+        token = await oauth.google.authorize_access_token(request)
+    except Exception:
+        return error_redirect
 
     user_info = token.get("userinfo")
+    if not user_info:
+        return error_redirect
 
-    email = user_info["email"]
+    email = user_info.get("email")
+    if not email:
+        return RedirectResponse(
+            url=f"{FRONTEND_URL}/oauth/callback?error=no_email&provider=google"
+        )
+
     full_name = user_info.get("name", "")
     google_id = user_info.get("sub")
 
     user = await db["users"].find_one({"email": email})
-
     if not user:
         user_doc = UserInDB(
             full_name=full_name,
@@ -355,27 +364,52 @@ async def google_callback(
             google_id=google_id,
         )
         result = await db["users"].insert_one(user_doc.model_dump())
+        user = await db["users"].find_one({"_id": result.inserted_id})
 
-        user = await db["users"].find_one({
-            "_id": result.inserted_id
-        })
+    temp_code = secrets.token_urlsafe(32)
+    await db["oauth_codes"].insert_one({
+        "temp_code": temp_code,
+        "user_id": user["_id"],
+        "expires": datetime.now(timezone.utc) + timedelta(minutes=OAUTH_CODE_EXPIRE_MINUTES),
+    })
 
-    user_id = str(user["_id"])
+    return RedirectResponse(
+        url=f"{FRONTEND_URL}/oauth/callback?temp_code={temp_code}&provider=google"
+    )
 
-    device_id = get_or_create_device_id(request, response)
 
+@router.post("/google/exchange", response_model=LoginResponse)
+async def google_exchange(
+    request_body: OAuthExchangeRequest,
+    request: Request,
+    response: Response,
+    db=Depends(get_db),
+):
+    code_doc = await db["oauth_codes"].find_one_and_delete({
+        "temp_code": request_body.temp_code,
+        "expires": {"$gt": datetime.now(timezone.utc)},
+    })
+    if not code_doc:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth code")
+
+    user = await db["users"].find_one({"_id": code_doc["user_id"]})
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth code")
+
+    device_id = get_or_create_device_id(request, response, request_body.device_id)
     ua = request.headers.get("user-agent", "")
     now = datetime.now(timezone.utc)
 
     trusted = next(
-        (
-            d for d in user.get("trusted_devices", [])
-            if d["device_id"] == device_id
-        ),
-        None
+        (d for d in user.get("trusted_devices", []) if d["device_id"] == device_id),
+        None,
     )
-
-    if not trusted:
+    if trusted:
+        await db["users"].update_one(
+            {"_id": user["_id"], "trusted_devices.device_id": device_id},
+            {"$set": {"trusted_devices.$.last_used": now}},
+        )
+    else:
         device_doc = {
             "device_id": device_id,
             "name": parse_device_name(ua),
@@ -383,28 +417,20 @@ async def google_callback(
             "added_at": now,
             "last_used": now,
         }
-
         await db["users"].update_one(
             {"_id": user["_id"]},
             {"$push": {"trusted_devices": device_doc}},
         )
 
-    refresh = create_refresh_token(user_id)
+    await db["revoked_devices"].delete_many({"user_id": user["_id"], "device_id": device_id})
 
-    await _save_session(
-        db,
-        user["_id"],
-        device_id,
-        refresh,
-    )
+    user_id = str(user["_id"])
+    refresh = create_refresh_token(user_id)
+    await _save_session(db, user["_id"], device_id, refresh)
 
     return LoginResponse(
         otp_required=False,
-        access_token=create_access_token(
-            user_id,
-            email,
-            device_id,
-        ),
+        access_token=create_access_token(user_id, user["email"], device_id),
         refresh_token=refresh,
         device_id=device_id,
     )
