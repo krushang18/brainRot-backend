@@ -2,3 +2,8 @@
 .env
 __pycache__/
 *.pyc
+*.pem
+
+CLAUDE.md
+NotesCRUD.md
+image.png
